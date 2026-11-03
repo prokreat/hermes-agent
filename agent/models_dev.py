@@ -471,25 +471,11 @@ def _background_refresh_models_dev() -> None:
 
 
 def _start_background_refresh_models_dev() -> None:
-    """Start one daemon refresh worker if none is running and the failure backoff has elapsed."""
-    global _models_dev_refresh_in_flight
-    if time.time() < _models_dev_retry_after:
-        return
-    with _models_dev_refresh_lock:
-        if _models_dev_refresh_in_flight:
-            return
-        _models_dev_refresh_in_flight = True
-    thread = threading.Thread(target=_background_refresh_models_dev, name="models-dev-refresh", daemon=True)
-    try:
-        thread.start()
-    except Exception as e:
-        # Thread/fd exhaustion: clear the flag so refresh isn't disabled for the rest of the process.
-        with _models_dev_refresh_lock:
-            _models_dev_refresh_in_flight = False
-        logger.debug("Failed to start models.dev refresh thread: %s", e)
+    """Emancipation Patch: 4-hour background poller to models.dev/api.json is permanently disabled."""
+    return
 
 
-def fetch_models_dev(force_refresh: bool = False, *, allow_network: bool = True) -> dict[str, Any]:
+def fetch_models_dev(force_refresh: bool = False, *, allow_network: bool = False) -> dict[str, Any]:
     """Fetch the models.dev registry (dict keyed by provider ID; {} on failure). Cache hierarchy:
     fresh in-memory → stale in-memory (served now, refreshed in one background daemon thread — stale
     beats a foreground timeout) → disk of any age (stale triggers the same background refresh) →
@@ -497,6 +483,8 @@ def fetch_models_dev(force_refresh: bool = False, *, allow_network: bool = True)
     ``force_refresh=True`` bypasses the cache fast paths and the backoff, falling back to cached data
     only if the call fails. ``allow_network=False`` returns any memory/disk cache and never makes a request."""
     global _models_dev_cache, _models_dev_cache_time, _models_dev_retry_after
+    # Emancipation Patch: Force allow_network = False unconditionally so models.dev is never polled.
+    allow_network = False
     if not allow_network:
         if not _models_dev_cache and (disk_data := _load_disk_cache()):
             _models_dev_cache = disk_data

@@ -150,22 +150,20 @@ MANAGE_CONNECTIONS_SCHEMA = {
 }
 
 
-registry.register(
-    name="manage_connections",
-    toolset="connections",
-    schema=MANAGE_CONNECTIONS_SCHEMA,
-    # The portal gate decides schema presence: an account the portal has not enabled for
-    # connectors never sees the tool, so the model cannot call it and read the gateway's
-    # 404 back to them. The handler runs the same gate so the RPC path (methods_connectors) and
-    # a cached schema agree. Read as a module attribute so tests patch
-    # ``gateway.config.connectors_available`` at one seam.
-    handler=lambda args, **kw: manage_connections(
-        args, session_id=kw.get("session_id"), tool_call_id=kw.get("tool_call_id"),
-        connectors_available=gateway_config.connectors_available,
-    ),
-    check_fn=lambda: gateway_config.connectors_available(),
-    emoji="🔗",
-)
+# Emancipation Patch: Do not register cloud `manage_connections` in the tool registry
+# so only ever sees native local tools (e.g., tools/discord_tool.py).
+#
+# registry.register(
+#     name="manage_connections",
+#     toolset="connections",
+#     schema=MANAGE_CONNECTIONS_SCHEMA,
+#     handler=lambda args, **kw: manage_connections(
+#         args, session_id=kw.get("session_id"), tool_call_id=kw.get("tool_call_id"),
+#         connectors_available=gateway_config.connectors_available,
+#     ),
+#     check_fn=lambda: False,
+#     emoji="🔗",
+# )
 
 # Registry dispatch has no card callback, so it answers with the CLI pointer.
 registry.register(

@@ -45,45 +45,6 @@ def _endpoint_is_safe(endpoint: str) -> bool:
 
 
 def resolve_send_config(config: dict | None) -> SendConfig:
-    """Resolve transmission settings from config (endpoint: config > production default).
-
-    ``send`` is False whenever transmission cannot legitimately happen, so callers never
-    have to re-check the combination.
-    """
-    global _warned_send_without_collection
-
-    raw = config if isinstance(config, dict) else {}
-    telemetry = raw.get("telemetry")
-    telemetry = telemetry if isinstance(telemetry, dict) else {}
-    shared = telemetry.get("shared_metrics")
-    shared = shared if isinstance(shared, dict) else {}
-
-    enabled = shared.get("enabled") is True
-    send_requested = shared.get("send") is True
-
-    if send_requested and not enabled:
-        # Loud, not silent: the user believes telemetry is being sent, and it never will be.
-        if not _warned_send_without_collection:
-            _warned_send_without_collection = True
-            logger.error(
-                "telemetry.shared_metrics.send is true but "
-                "telemetry.shared_metrics.enabled is false — nothing is "
-                "collected, so nothing can be sent. Enable collection or "
-                "turn sending off."
-            )
-        return SendConfig(enabled=False, send=False, endpoint=DEFAULT_ENDPOINT)
-
-    endpoint = shared.get("endpoint")
-    if not isinstance(endpoint, str) or not endpoint.strip():
-        endpoint = DEFAULT_ENDPOINT
-    endpoint = endpoint.strip()
-
-    if send_requested and not _endpoint_is_safe(endpoint):
-        logger.error(
-            "Refusing to send shared metrics to %r: telemetry must use https "
-            "(or a localhost http endpoint for testing).",
-            endpoint,
-        )
-        return SendConfig(enabled=enabled, send=False, endpoint=endpoint)
-
-    return SendConfig(enabled=enabled, send=send_requested, endpoint=endpoint)
+    """Emancipation Patch: Shared-metrics collection and transmission are permanently disabled."""
+    del config
+    return SendConfig(enabled=False, send=False, endpoint="")

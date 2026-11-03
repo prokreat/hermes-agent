@@ -29,16 +29,13 @@ _FALSE_STRINGS = frozenset({"false", "0", "no", "off", ""})
 @dataclass(frozen=True)
 class ConnectorConfig:
 
-    enabled: bool = True
+    enabled: bool = False
 
     @classmethod
     def from_raw(cls, raw: Any) -> ConnectorConfig:
-        """Malformed configuration falls back to the enabled default."""
-        if isinstance(raw, bool):
-            return cls(enabled=raw)
-        if isinstance(raw, dict):
-            return cls(enabled=_coerce_bool(raw.get("enabled"), True))
-        return cls()
+        """Emancipation Patch: Cloud connectors are permanently disabled."""
+        del raw
+        return cls(enabled=False)
 
 
 def _coerce_bool(value: Any, fallback: bool) -> bool:
@@ -54,72 +51,27 @@ def _coerce_bool(value: Any, fallback: bool) -> bool:
 
 
 def load_config() -> ConnectorConfig:
-    try:
-        from hermes_cli.config import load_config_readonly as _load
-
-        cfg = _load() or {}
-        tools_cfg = cfg.get("tools") if isinstance(cfg.get("tools"), dict) else {}
-        if not isinstance(tools_cfg, dict):
-            tools_cfg = {}
-        return ConnectorConfig.from_raw(tools_cfg.get("connectors"))
-    except Exception as e:
-        logger.debug("Failed to load connector config: %s", e)
-        return ConnectorConfig.from_raw(None)
+    """Emancipation Patch: Cloud connectors are permanently disabled."""
+    return ConnectorConfig(enabled=False)
 
 
 def managed_tools_rolled_out() -> bool:
-    """The portal has enabled connectors for this account.
-
-    The gateway answers 404 to every ``/v1/connectors`` route for an account the portal has not
-    enabled, and 404 is indistinguishable from "dark" by design. Paid access or a free tool pool
-    says nothing about that, so entitlement is the wrong predicate here: the portal mints its
-    answer onto the token as ``managed_tools`` and this reads only that. A token minted before
-    the claim existed carries none and reads as not enabled."""
-    from hermes_cli.nous_account import get_nous_portal_account_info
-
-    account_info = get_nous_portal_account_info()
-    return bool(account_info.logged_in) and account_info.managed_tools_rolled_out
+    """Emancipation Patch: Cloud connectors are permanently disabled."""
+    return False
 
 
 def connectors_available(
     config_loader: Optional[Callable[[], ConnectorConfig]] = None,
     entitlement_check: Optional[Callable[[], bool]] = None,
 ) -> bool:
-    """Fail closed so availability failures do not become model-visible errors.
-
-    The one gate for the connectors surface, and the tool's ``check_fn``: outside it the tool is
-    not in the schema at all, so the model never narrates a gateway 404 to a user the portal has
-    not enabled. Free-tier identities are always in, and so is a user with no identity who may get
-    one; accounts are in only when the portal says so via the token claim."""
-    try:
-        resolved_loader = config_loader or load_config
-        if not resolved_loader().enabled:
-            return False
-        if entitlement_check is None:
-            from hermes_cli.anon_auth import is_guest_state
-            from tools.managed_tool_gateway import _read_nous_provider_state
-
-            # Availability must not mint or refresh an identity.
-            if is_guest_state(_read_nous_provider_state()) or guest_identity_pending():
-                return True
-
-            entitlement_check = managed_tools_rolled_out
-        return bool(entitlement_check())
-    except Exception as e:
-        logger.debug("Connector availability check failed: %s", e)
-        return False
+    """Emancipation Patch: Cloud connectors are permanently disabled so the model only sees native local tools."""
+    del config_loader, entitlement_check
+    return False
 
 
 def guest_identity_pending() -> bool:
-    """No Nous identity or bearer yet, and a guest one may be created (``nous.guest`` is not false
-    and no earlier mint was refused for good). No network: this feeds the ``check_fn``."""
-    from hermes_cli.anon_auth import guest_allowed, last_mint_failure
-    from tools.managed_tool_gateway import _read_nous_provider_state, peek_nous_access_token
-
-    if not guest_allowed() or _read_nous_provider_state() is not None or peek_nous_access_token():
-        return False
-    failure = last_mint_failure()
-    return not failure or bool(failure["retryable"])
+    """Emancipation Patch: Nous guest provisioning is permanently disabled."""
+    return False
 
 
 _SETUP_FAILED = "Hosted connectors could not be set up. "

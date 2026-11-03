@@ -346,7 +346,7 @@ def check_nous_free_tier(*, force_fresh: bool = False, cached_only: bool = False
 # [{modelName}], {paid,free}Recommended{Compaction,Vision}Model: {modelName} | null
 # ---------------------------------------------------------------------------
 
-NOUS_RECOMMENDED_MODELS_MIRROR = "https://web-assets.nousresearch.com/dynamic"
+NOUS_RECOMMENDED_MODELS_MIRROR = ""
 _NOUS_MIRROR_TIMEOUT: float = 2.0  # seconds: a hanging mirror delays the Portal fallback by at most this
 _NOUS_RECOMMENDED_CACHE_TTL: int = 600  # seconds (10 minutes)
 # (result_dict, monotonic timestamp), scoped to the profile and portal.
@@ -389,36 +389,8 @@ def _write_nous_recommended_disk(base: str, data: dict[str, Any]) -> None:
 def fetch_nous_recommended_models(
     portal_base_url: str = "", timeout: float = 5.0, *, force_refresh: bool = False
 ) -> dict[str, Any]:
-    """Fetch the Portal's public recommended models (no auth): its R2 mirror, else the Portal itself.
-    Results are reused for ``_NOUS_RECOMMENDED_CACHE_TTL`` s across restarts unless ``force_refresh``;
-    stale disk data is the fallback on failure, and reading it never renews its freshness."""
-    base = (portal_base_url or "https://portal.nousresearch.com").rstrip("/")
-    now = time.monotonic()
-    cache_key = (_pricing_profile_key(), base)
-    cached = _nous_recommended_cache.get(cache_key)
-    if not force_refresh and cached is not None and now - cached[1] < _NOUS_RECOMMENDED_CACHE_TTL:
-        return cached[0]
-    disk = _read_nous_recommended_disk(base)
-    if not force_refresh and disk is not None and 0 <= disk[1] < _NOUS_RECOMMENDED_CACHE_TTL:
-        data, age = disk
-        _nous_recommended_cache[cache_key] = (data, now - age)
-        return data
-    parts = urllib.parse.urlsplit(base)
-    mirror = [] if is_loopback_host(parts.hostname) else [
-        (f"{NOUS_RECOMMENDED_MODELS_MIRROR}/{parts.netloc}", min(timeout, _NOUS_MIRROR_TIMEOUT))]
-    for origin, origin_timeout in [*mirror, (base, timeout)]:  # the Portal itself when its mirror is missing (404) or failing
-        try:
-            data = _get_json(f"{origin}/api/nous/recommended-models", timeout=origin_timeout,
-                             headers={"Accept": "application/json", "Accept-Encoding": "gzip"})
-        except Exception:
-            continue
-        if isinstance(data, dict) and data:
-            _write_nous_recommended_disk(base, data)
-            break
-    else:
-        data = disk[0] if disk is not None else {}
-    _nous_recommended_cache[cache_key] = (data, now)
-    return data
+    """Emancipated: never fetch Nous Portal recommended models."""
+    return {}
 
 
 def _resolve_nous_portal_url() -> str:
@@ -652,72 +624,8 @@ def _fetch_live_catalog_index(url: str, timeout: float, opener) -> Optional[tupl
 
 def fetch_openrouter_models(
     timeout: float = 8.0, *, force_refresh: bool = False, cache_only: bool = False) -> list[tuple[str, str]]:
-    """Return the curated OpenRouter picker list, refreshed from the live catalog when possible.
-
-    ``cache_only`` never opens a socket: memory, then disk (stale accepted), then the in-repo snapshot."""
-    # The curated list is filtered from this profile's manifest (``model_catalog.*`` config, its
-    # ``<home>/cache`` copy), so a routed profile keeps its own slot instead of the module one.
-    from hermes_cli.models_profile_cache import profile_slot_get, profile_slot_set
-    _me = sys.modules[__name__]
-    cached = profile_slot_get(_me, "_openrouter_catalog_cache")
-
-    if cached is not None and not force_refresh:
-        return list(cached)
-
-    # Cold process: serve from the persisted disk cache when fresh so the
-    # picker doesn't re-download the full ~686KB catalog on every open.
-    if not force_refresh:
-        disk = _read_openrouter_catalog_disk(allow_stale=cache_only)
-        if disk:
-            if not cache_only:  # a stale copy is served, never memoized as fresh
-                profile_slot_set(_me, "_openrouter_catalog_cache", disk)
-            return list(disk)
-    if cache_only:
-        return list(OPENROUTER_MODELS)
-
-    # Remote catalog manifest first, in-repo snapshot when unreachable; the live /v1/models filter
-    # (tool support, free pricing) is applied on top either way.
-    try:
-        from hermes_cli.model_catalog import get_curated_openrouter_models
-        remote = get_curated_openrouter_models()
-    except Exception:
-        remote = None
-    fallback = list(remote) if remote else list(OPENROUTER_MODELS)
-
-    live = _fetch_live_catalog_index(_OPENROUTER_CATALOG_URL, timeout, _urlopen_model_catalog_request)
-    if live is None:
-        return list(cached or fallback)
-    live_items, live_by_id = live
-
-    # Free warm-up for the reasoning-capability cache: same payload the caps fetch would pull.
-    global _openrouter_reasoning_caps_cache
-    seeded = _seed_reasoning_caps(_OPENROUTER_CATALOG_URL, live_items)
-    if _openrouter_reasoning_caps_cache is None and seeded is not None:
-        _openrouter_reasoning_caps_cache = seeded
-
-    curated: list[tuple[str, str]] = []
-    silent_default = get_preferred_silent_default_model("openrouter")
-    for preferred_id, _ in fallback:
-        live_item = live_by_id.get(preferred_id)
-        # Hide models without tool-calling support — selecting one fails at the first tool call.
-        if live_item is None or not _openrouter_model_supports_tools(live_item):
-            continue
-        # Hide models that don't advertise tool-calling support — hermes-agent requires it and surfacing
-        # them leads to immediate runtime failures when the user selects them. Ported from
-        # Kilo-Org/kilocode#9068.
-        if preferred_id == silent_default:
-            desc = "default"  # keep the silent-default badge through the live refresh
-        else:
-            desc = "free" if _openrouter_model_is_free(live_item.get("pricing")) else ""
-        curated.append((preferred_id, desc))
-
-    if not curated:
-        return list(cached or fallback)
-    if not curated[0][1]:
-        curated[0] = (curated[0][0], "recommended")
-    profile_slot_set(_me, "_openrouter_catalog_cache", curated)
-    _write_openrouter_catalog_disk(curated)
-    return list(curated)
+    """Emancipated: never open network sockets to openrouter.ai; return static snapshot."""
+    return list(OPENROUTER_MODELS)
 
 
 def model_ids(*, force_refresh: bool = False) -> list[str]:

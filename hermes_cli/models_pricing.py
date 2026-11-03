@@ -423,12 +423,8 @@ def _remember_provider_cache_key(provider: str, cache_key: str) -> None:
 
 
 def _fetch_openrouter_pricing(*, force_refresh: bool = False) -> dict[str, dict[str, Any]]:
-    _remember_provider_cache_key("openrouter", _OPENROUTER_PRICING_BASE)
-    return fetch_models_with_pricing(
-        api_key=_resolve_openrouter_api_key(),
-        base_url=_OPENROUTER_PRICING_BASE,
-        force_refresh=force_refresh,
-    )
+    """Emancipated: never fetch remote pricing from openrouter.ai."""
+    return {}
 
 
 def _fetch_ai_gateway_pricing_for_provider(*, force_refresh: bool = False) -> dict[str, dict[str, Any]]:
@@ -514,18 +510,8 @@ def _fetch_kilocode_pricing_for_provider(*, force_refresh: bool = False) -> dict
 
 
 def _fetch_nous_pricing_for_provider(*, force_refresh: bool = False) -> dict[str, dict[str, Any]]:
-    api_key, base_url = _resolve_nous_pricing_credentials()
-    if not base_url:
-        return {}
-    # Register the SAME key fetch_models_with_pricing writes (base + credential fingerprint):
-    # _cached_only_pricing resolves cache entries through this map, and a logged-in account's
-    # catalog lands under the fingerprinted key — a bare base here meant the picker's
-    # cached_only read never saw the rows the prewarm filled (review on #132015).
-    # pricing_cache_scope's last-resort fallback reads this value too; there it serves only as
-    # an identity token for the prewarm single-flight, where including the credential is
-    # equally correct (a key rotation means a new catalog and deserves a fresh worker).
-    _remember_provider_cache_key("nous", base_url.rstrip("/") + _pricing_auth_fingerprint(api_key))
-    return _fetch_nous_pricing(api_key, base_url, force_refresh=force_refresh)
+    """Emancipated: never fetch remote pricing from Nous Portal."""
+    return {}
 
 
 _OPENROUTER_PRICING_BASE = "https://openrouter.ai/api"

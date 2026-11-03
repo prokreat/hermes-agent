@@ -212,22 +212,8 @@ class GatewaySessionWatchersMixin:
         return True
 
     async def _model_catalog_refresh_watcher(self) -> None:
-        """Refresh the /model picker's remote catalogs every TTL window. The picker itself only
-        refreshes on a cold/stale open, so if nobody opens ``/model`` the cache never updates."""
-        from hermes_cli.model_catalog import refresh_catalogs, refresh_interval_seconds
-        await asyncio.sleep(30)  # let startup settle
-        while self._running:
-            try:
-                await asyncio.to_thread(refresh_catalogs)
-            except Exception as exc:
-                logger.debug("Model catalog refresh failed: %s", exc)
-            try:
-                interval = refresh_interval_seconds()
-            except Exception:
-                interval = 1200.0
-            deadline = time.monotonic() + interval
-            while self._running and time.monotonic() < deadline:
-                await asyncio.sleep(min(30.0, max(0.0, deadline - time.monotonic())))
+        """Emancipated: disabled remote model catalog background polling."""
+        return
 
     async def _session_stall_watcher(self, interval: float = 30.0):
         """Pending-inbound + stale-activity stall watchdog. Progress comes only from

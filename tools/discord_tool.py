@@ -336,6 +336,7 @@ def _fetch_messages(
     token: str, channel_id: str, limit: int = 50,
     before: Optional[str] = None, after: Optional[str] = None, **_kwargs: Any) -> str:
     """``before``/``after`` are message snowflakes for reverse/forward pagination."""
+    channel_id = _resolve_discord_channel_id(channel_id)
     params: dict[str, str] = {"limit": _limit_param(limit, 50)}
     if before:
         params["before"] = before
@@ -347,6 +348,7 @@ def _fetch_messages(
 
 def _list_pins(token: str, channel_id: str, **_kwargs: Any) -> str:
     """Pinned messages (content truncated for overview)."""
+    channel_id = _resolve_discord_channel_id(channel_id)
     messages = _discord_request("GET", f"/channels/{channel_id}/pins", token)
     return _listing("pinned_messages", [
         {
@@ -355,10 +357,65 @@ def _list_pins(token: str, channel_id: str, **_kwargs: Any) -> str:
         for msg in messages])
 
 
+def _resolve_discord_channel_id(channel_id: Optional[str]) -> str:
+    """Resolve a snowflake, channel/DM name ('general', 'dm'), or empty default to a Discord channel ID."""
+    raw = (channel_id or "").strip()
+    if raw.lower().startswith("discord:"):
+        raw = raw[len("discord:"):].strip()
+    if raw.startswith("#") or raw.startswith("@"):
+        raw = raw[1:].strip()
+    if raw and raw.isdigit():
+        return raw
+
+    home_ch = (get_secret("DISCORD_HOME_CHANNEL", "") or "").strip()
+    if not raw or raw.lower() in ("default", "home"):
+        if home_ch:
+            return home_ch
+
+    try:
+        from hermes_constants import get_hermes_home
+        dir_path = get_hermes_home() / "channel_directory.json"
+        if dir_path.exists():
+            data = json.loads(dir_path.read_text(encoding="utf-8-sig"))
+            entries = (data.get("platforms") or {}).get("discord") or []
+            target_lower = raw.lower()
+            if not target_lower or target_lower in ("default", "home", "dm"):
+                for entry in entries:
+                    if isinstance(entry, dict) and entry.get("type") == "dm" and entry.get("id"):
+                        return str(entry["id"])
+            for entry in entries:
+                if isinstance(entry, dict) and str(entry.get("name", "")).lower() == target_lower and entry.get("id"):
+                    return str(entry["id"])
+    except Exception:
+        logger.debug("discord channel_directory lookup failed", exc_info=True)
+
+    return raw or home_ch
+
+
+def _send_message(
+    token: str, content: str, channel_id: Optional[str] = None, **_kwargs: Any) -> str:
+    """Send a message to a Discord channel or DM (defaults to DISCORD_HOME_CHANNEL / DM when channel_id omitted)."""
+    resolved_channel_id = _resolve_discord_channel_id(channel_id)
+    if not resolved_channel_id:
+        raise ValueError(
+            "No channel_id provided and DISCORD_HOME_CHANNEL is not configured. "
+            "Pass channel_id (snowflake or channel name like 'general')."
+        )
+    msg = _discord_request(
+        "POST", f"/channels/{resolved_channel_id}/messages", token, body={"content": content})
+    return json.dumps({
+        "success": True,
+        "channel_id": resolved_channel_id,
+        "message_id": msg.get("id") if isinstance(msg, dict) else None,
+        "content": msg.get("content", content) if isinstance(msg, dict) else content,
+    })
+
+
 def _create_thread(
     token: str, channel_id: str, name: str, message_id: Optional[str] = None,
     auto_archive_duration: int = 1440, **_kwargs: Any) -> str:
     """Create a thread — anchored to ``message_id`` when given, else standalone public."""
+    channel_id = _resolve_discord_channel_id(channel_id)
     body: dict[str, Any] = {"name": name, "auto_archive_duration": auto_archive_duration}
     path = f"/channels/{channel_id}/threads"
     if message_id:
@@ -372,6 +429,8 @@ def _create_thread(
 def _mutation(method: str, path: str, message: str):
     """Body-less write action: ``path``/``message`` are format templates over the action kwargs."""
     def _action(token: str, **kw: Any) -> str:
+        if "channel_id" in kw:
+            kw["channel_id"] = _resolve_discord_channel_id(kw.get("channel_id"))
         _discord_request(method, path.format(**kw), token)
         return json.dumps({"success": True, "message": message.format(**kw)})
     return _action
@@ -400,6 +459,7 @@ _ACTION_MANIFEST = [
     ("member_info", _member_info, "(guild_id, user_id)", "lookup a specific member"),
     ("search_members", _search_members, "(guild_id, query)", "find members by name prefix"),
     ("fetch_messages", _fetch_messages, "(channel_id)", "recent messages; optional before/after snowflakes"),
+    ("send_message", _send_message, "(content)", "send a message to channel_id (snowflakes or channel/DM alias) or DISCORD_HOME_CHANNEL when channel_id is omitted"),
     ("list_pins", _list_pins, "(channel_id)", "pinned messages in a channel"),
     ("pin_message", _pin_message, "(channel_id, message_id)", "pin a message"),
     ("unpin_message", _unpin_message, "(channel_id, message_id)", "unpin a message"),
@@ -415,7 +475,7 @@ _REQUIRED_PARAMS: dict[str, list[str]] = {
 
 # Two tools share one action table: ``discord`` (core, the participation trio every bot
 # user wants) and ``discord_admin`` (everything else).
-_CORE_ACTION_NAMES = frozenset({"fetch_messages", "search_members", "create_thread"})
+_CORE_ACTION_NAMES = frozenset({"fetch_messages", "send_message", "search_members", "create_thread"})
 _CORE_ACTIONS = {k: v for k, v in _ACTIONS.items() if k in _CORE_ACTION_NAMES}
 _ADMIN_ACTIONS = {k: v for k, v in _ACTIONS.items() if k not in _CORE_ACTION_NAMES}
 
@@ -466,15 +526,19 @@ _TOOL_DESCRIPTIONS = {
         "per-guild permission (e.g. MANAGE_ROLES for add_role).",
     ),
     "discord": (
-        "Read and participate in a Discord server.",
-        "Use the channel_id from the current conversation context. "
+        "Read and participate in a Discord server or DM.",
+        "Use the channel_id from the current conversation context, a channel/DM alias, or omit channel_id on send_message to use DISCORD_HOME_CHANNEL. "
         "Use search_members to look up user IDs by name prefix.",
     ),
 }
 
 _SCHEMA_PROPERTIES: dict[str, Any] = {
     "guild_id": {"type": "string", "description": "Discord server (guild) ID."},
-    "channel_id": {"type": "string", "description": "Discord channel ID."},
+    "channel_id": {
+        "type": "string",
+        "description": "Discord channel or DM snowflake ID, or alias from channel_directory.json (e.g. 'general', 'dm'). Optional for send_message (defaults to DISCORD_HOME_CHANNEL).",
+    },
+    "content": {"type": "string", "description": "Message text to send (required for send_message)."},
     "user_id": {"type": "string", "description": "Discord user ID."},
     "role_id": {"type": "string", "description": "Discord role ID."},
     "message_id": {"type": "string", "description": "Discord message ID."},
@@ -548,6 +612,7 @@ _ROLE_HIERARCHY = "Either the bot lacks MANAGE_ROLES, or the target role sits hi
 
 # Per-action guidance for a call-time 403 (per-guild permissions are never pre-checked).
 _ACTION_403_HINT = {
+    "send_message": "Bot lacks SEND_MESSAGES permission in this channel, or channel_id is a guild/server ID instead of a text/DM channel ID.",
     "pin_message": (
         f"{_NO_MANAGE_MESSAGES}. "
         "Ask the server admin to grant the bot a role that has MANAGE_MESSAGES, or a per-channel overwrite."),
@@ -580,7 +645,7 @@ def check_discord_tool_requirements() -> bool:
 
 # ── handlers ─────────────────────────────────────────────────────────────────
 _HANDLER_DEFAULTS = {
-    "guild_id": "", "channel_id": "", "user_id": "", "role_id": "", "message_id": "", "query": "",
+    "guild_id": "", "channel_id": "", "content": "", "user_id": "", "role_id": "", "message_id": "", "query": "",
     "name": "", "limit": 50, "before": "", "after": "", "auto_archive_duration": 1440}
 
 
@@ -599,6 +664,8 @@ def _run_discord_action(action: str, valid_actions: dict[str, Any], tool_label: 
         return tool_error(
             f"Action '{action}' is disabled by config (discord.server_actions). "
             f"Allowed: {', '.join(allowlist) if allowlist else '<none>'}")
+    if not params.get("content") and params.get("message"):
+        params = {**params, "content": params["message"]}
     kwargs = {k: params.get(k, v) for k, v in _HANDLER_DEFAULTS.items()}
     missing = [p for p in _REQUIRED_PARAMS.get(action, []) if not kwargs.get(p)]
     if missing:

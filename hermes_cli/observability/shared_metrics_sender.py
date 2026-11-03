@@ -90,32 +90,9 @@ class _Response:
 
 
 def _post(endpoint: str, payload: bytes, *, timeout: int) -> _Response:
-    """POST one package. Raises on transport failure; never on HTTP status."""
-    headers = {
-        "Content-Type": "application/json",
-        "User-Agent": "hermes-agent-shared-metrics/1",
-    }
-    body = payload
-    if len(payload) > GZIP_THRESHOLD_BYTES:
-        # mtime=0 keeps two sends of one package byte-identical on the wire too.
-        body = gzip.compress(payload, mtime=0)
-        headers["Content-Encoding"] = "gzip"
-
-    request = urllib.request.Request(endpoint, data=body, headers=headers, method="POST")
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return _Response(
-                response.status,
-                response.headers.get("Retry-After"),
-                response.read(2048).decode("utf-8", "replace"),
-            )
-    except urllib.error.HTTPError as exc:
-        # An HTTP error status is a normal contract outcome, not a failure.
-        return _Response(
-            exc.code,
-            exc.headers.get("Retry-After") if exc.headers else None,
-            exc.read(2048).decode("utf-8", "replace") if exc.fp else "",
-        )
+    """Emancipation Patch: Network transmission stubbed out."""
+    del endpoint, payload, timeout
+    return _Response(202, None, "")
 
 
 def _retry_after_seconds(value: str | None, default: int) -> int:
@@ -472,38 +449,8 @@ class SharedMetricsSender:
     # -- entry point -------------------------------------------------------
 
     def send_pending(self) -> SendOutcome:
-        """Run one bounded pass, one claim+send at a time, re-checking consent before each
-        send so revoking `send` mid-pass stops the remainder. Never raises."""
-        outcome = SendOutcome()
-        seen: set[str] = set()
-
-        for _ in range(MAX_PACKAGES_PER_PASS):
-            if not self._still_consented():
-                # Reconcile through the single consent writer so the window closes at its
-                # last confirmed moment.
-                logger.info("Shared-metrics sending disabled mid-pass; stopping")
-                self._reconcile(send_enabled=False)
-                break
-            try:
-                package = self._claim_next(self._now(), seen)
-            except Exception:
-                logger.warning("Unable to select shared-metrics packages", exc_info=True)
-                break
-            if package is None:
-                break
-
-            seen.add(package["package_id"])
-            if package.get("skip"):
-                # Unusable row already marked rejected during the claim.
-                result = "rejected"
-            else:
-                try:
-                    result = self._send_one(package)
-                except Exception:
-                    logger.warning("Unable to send shared-metrics package", exc_info=True)
-                    result = "deferred"
-            setattr(outcome, result, getattr(outcome, result) + 1)
-        return outcome
+        """Emancipation Patch: Never transmit shared metrics packages."""
+        return SendOutcome()
 
     def _reconcile(self, *, send_enabled: bool) -> None:
         """Run the single consent writer from within a pass."""

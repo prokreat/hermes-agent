@@ -154,16 +154,8 @@ def anon_failure_copy(code: str, *, retry_after: Any = None) -> str:
 
 
 def guest_allowed() -> bool:
-    """``nous.guest`` (default True) has not switched guests off: no connector guest, no trial."""
-    try:
-        from hermes_cli.config import load_config_readonly
-        nous_cfg = load_config_readonly().get("nous")
-    except Exception:  # config unreadable: keep today's behaviour (no guest) rather than mint
-        logger.debug("guest: config unreadable, treating nous.guest as false", exc_info=True)
-        return False
-    if not isinstance(nous_cfg, dict):
-        return True
-    return bool(nous_cfg.get("guest", True))
+    """Emancipation Patch: Nous guest provisioning and trial are permanently disabled."""
+    return False
 
 
 def is_guest_state(state: Any) -> bool:
@@ -366,22 +358,11 @@ def mint_request_body() -> dict[str, Any]:
 
 
 def mint_guest(client: httpx.Client, portal_base_url: str) -> dict[str, Any]:
-    """``POST /api/anonymous/create`` -> ``{user_id, org_id, token, idle_ttl_days}``. Token shown once."""
-    response = client.post(
-        f"{portal_base_url.rstrip('/')}/api/anonymous/create", headers=_anon_headers(), json=mint_request_body())
-    payload = _raise_for_anon_status(response, action="sign-up")
-    token = payload.get("token")
-    if not isinstance(token, str) or not token.startswith("anon_"):
-        logger.info("Nous free tier sign-up returned no credential")
-        raise _anon_err(ANON_FAILURE_COPY[ANON_SERVER_ERROR], ANON_SERVER_ERROR)
-    return payload
+    """Emancipation Patch: Anonymous account creation is permanently disabled."""
+    del client, portal_base_url
+    raise _anon_err("Nous guest provisioning is disabled.", ANON_GATE_CLOSED)
 
 
-# ``purpose: "connectors"`` (NAS hermes-portal#1516) mints a JWT whose only scope is
-# ``connectors:invoke``: connector routes and the tool gateway accept it, the welcome host refuses it,
-# and NAS never puts the free-inference challenge in front of it. A NAS from before #1516 ignores the
-# field and answers with an inference token (a superset), so which slot a token fills is read off its
-# ``scope`` claim, never off the purpose that asked for it.
 def is_connectors_only(token: Any) -> bool:
     """*token* carries a scope claim and it lacks ``inference:invoke`` (a scopeless JWT reads as today's)."""
     from hermes_cli.auth_nous import _scope_values
@@ -408,41 +389,9 @@ def exchange_anon_jwt(
     client: httpx.Client, portal_base_url: str, anon_token: str, *, auth_state: dict[str, Any],
     purpose: str,
 ) -> dict[str, Any]:
-    """``POST /api/anonymous/token {token}`` -> ``{access_token, expires_in, inference_base_url, ...}``.
-
-    Raises :class:`AnonCredentialDead` on 404 ``unknown_token`` / 401 (reaped or claimed), and
-    :class:`~hermes_cli.anon_challenge.AnonChallengeRequired` (carrying what the status poll needs:
-    portal, credential, and the *auth_state* whose ``tls`` block the mint used) on a browser challenge.
-    """
-    from hermes_cli import anon_challenge
-    response = client.post(
-        f"{portal_base_url.rstrip('/')}/api/anonymous/token", headers=_anon_headers(),
-        json={"token": anon_token, "client": anon_challenge.client_info(), "purpose": purpose})
-
-    def challenge(body: dict[str, Any]) -> AuthError:
-        return anon_challenge.challenge_error(
-            body, portal_base_url=portal_base_url, anon_token=anon_token, auth_state=auth_state)
-
-    def signin(body: dict[str, Any]) -> AuthError:
-        # Refused without an account, or a 428 this version has no primitive for: either way the
-        # honest way forward is a sign-in, in the service's own words when it sent some.
-        return anon_challenge.signin_required_error(body.get("message"))
-
-    def proof_of_work(_body: dict[str, Any]) -> AuthError:
-        # The PoW verdict, kept out of the 428 sign-in catch-all below.
-        return _anon_err(ANON_FAILURE_COPY[ANON_POW_REQUIRED], ANON_POW_REQUIRED)
-
-    # The challenge gate sits on the token exchange only; every other endpoint keeps the table.
-    payload = _raise_for_anon_status(response, action="token exchange", overrides={
-        (428, "challenge_required"): challenge, (428, "pow_"): proof_of_work, (428, None): signin,
-        (403, "signin_required"): signin, (403, "access_denied"): signin})
-    if not isinstance(payload.get("access_token"), str) or not payload["access_token"]:
-        logger.info("Nous free tier token exchange returned no token")
-        raise _anon_err(ANON_FAILURE_COPY[ANON_SERVER_ERROR], ANON_SERVER_ERROR)
-    # A connectors-only grant must neither clear nor announce an inference challenge.
-    if not is_connectors_only(payload["access_token"]):
-        anon_challenge.note_optional_challenges(payload, portal_base_url)
-    return payload
+    """Emancipation Patch: Anonymous token exchange is permanently disabled."""
+    del client, portal_base_url, anon_token, auth_state, purpose
+    raise _anon_err("Nous guest token exchange is disabled.", ANON_GATE_CLOSED)
 
 
 def apply_exchange_to_state(state: dict[str, Any], exchanged: dict[str, Any]) -> None:
@@ -617,126 +566,24 @@ def _note_mint_failure(err: AuthError) -> MintFailure:
 
 def _reconcile_and_provision(*, timeout_seconds: float, force: bool = False,
                              welcome_claim: bool = False) -> Optional[dict[str, Any]]:
-    """The lifecycle body, run under profile lock THEN shared lock (the documented order).
-
-    1. The shared store is the identity of record for this Hermes root. If it holds an identity
-       that differs from the profile's, the profile adopts it (a stale guest never outlives a
-       sibling profile's sign-in, and never overwrites it).
-    2. Otherwise the profile's own identity stands.
-    3. Nothing anywhere: mint, persisting the credential before exchanging it.
-    """
-    from hermes_cli.auth import (
-        _auth_store_lock, _load_auth_store, _load_provider_state, _save_auth_store,
-        _store_provider_state, _resolve_verify)
-    from hermes_cli.auth_nous import (
-        _SHARED_RENEWAL_KEY, _nous_http_client, _nous_shared_store_lock, _read_shared_nous_state,
-        _write_shared_nous_state)
-    portal = _portal_base_url()
-    with _auth_store_lock():
-        auth_store = _load_auth_store()
-        profile_state = _load_provider_state(auth_store, "nous")
-        with _nous_shared_store_lock(timeout_seconds=max(timeout_seconds, 5.0)):
-            shared = _read_shared_nous_state()
-            if shared and _shared_identity_key(shared) != _shared_identity_key(profile_state):
-                state = {k: v for k, v in shared.items() if k != _SHARED_RENEWAL_KEY}  # another account's tokens
-                _store_provider_state(auth_store, "nous", state, set_active=not is_guest_state(state))
-                _save_auth_store(auth_store)
-                logger.debug("Nous identity adopted from the shared store")
-                return state
-            if profile_state:
-                if not shared:
-                    _write_shared_nous_state(profile_state, renewal=False)
-                return profile_state
-            # A caller queued on these locks behind a mint that just failed waits out its cooldown.
-            failure = _mint_failure_for_profile()
-            if failure and not force and time.monotonic() < failure.not_before:
-                return None
-            verify = _resolve_verify(insecure=None, ca_bundle=None, auth_state=None)
-            try:
-                with _nous_http_client(timeout_seconds, verify) as client:
-                    return _mint_locked(client, portal, auth_store, welcome_claim=welcome_claim)
-            except Exception as exc:
-                # Noted before the locks are released, so a caller queued on them sees the cooldown.
-                err = classify_mint_exception(exc)
-                err.mint_failure = _note_mint_failure(err)
-                if err is exc:
-                    raise
-                raise err from exc
+    """Emancipation Patch: Anonymous guest provisioning is permanently disabled."""
+    del timeout_seconds, force, welcome_claim
+    return None
 
 
 def ensure_portal_identity(
     *, explicit: bool, timeout_seconds: float = GUEST_MINT_TIMEOUT_SECONDS, force: bool = False,
     welcome_claim: bool = False,
 ) -> Optional[dict[str, Any]]:
-    """Make sure this profile has a Nous identity (guest or account); mint a guest only if the shared
-    store has none. Returns the ``providers.nous`` state, or None (disabled / failed once already).
-
-    ``explicit`` is required and must be True: the only callers are the first hosted connector action
-    (``tools.connectors.gateway.config.ensure_guest_identity``), the connectors dead-credential
-    replacement (``managed_tool_gateway._replace_dead_guest_token``) and the desktop's welcome-trial
-    claim (``welcome_trial.claim_desktop_free_tier``), which passes ``welcome_claim=True`` so a guest
-    it mints carries the stamp from its first write. Every other guest is minted with
-    ``welcome_claim: False`` and serves connectors only.
-    Nothing creates an identity as a side effect of reading status, resolving a provider or fetching a
-    connector bearer (NS-845 Q1.2).
-
-    Order: gate (``guest_allowed``) -> reconcile with the shared store -> mint. Locks are taken
-    profile first, then shared, matching every other Nous path. Blocking, bounded by ``timeout_seconds``.
-
-    A failed mint is memoised with a cooldown (``MintFailure``): until it passes, and for a
-    terminal code forever, this returns None without touching the portal. ``force=True`` is the
-    user's own retry: it makes exactly one attempt
-    regardless of the cooldown. Every failure raises an ``AuthError`` whose ``code`` is one of the
-    ``ANON_*`` codes and whose ``retry_after`` / ``retryable`` say what a caller may do next.
-    """
-    if not explicit:
-        raise ValueError("ensure_portal_identity: only explicit creators may call this (explicit=True)")
-    if not guest_allowed():
-        return None
-    failure = _mint_failure_for_profile()
-    if failure and not force and not current_nous_state() and time.monotonic() < failure.not_before:
-        return None  # in cooldown (or terminal) for this profile; do not hammer the portal
-    try:
-        state = _reconcile_and_provision(timeout_seconds=timeout_seconds, force=force,
-                                         welcome_claim=welcome_claim)
-    except Exception as exc:
-        err = classify_mint_exception(exc)
-        noted = getattr(err, "mint_failure", None) or _note_mint_failure(err)
-        logger.info("Nous free tier not set up (%s, attempt %d%s)", noted.code, noted.attempts,
-                    f", next try in {noted.retry_after:.0f}s" if noted.retryable else ", not retried")
-        if err is exc:
-            raise
-        raise err from exc
-    if state is not None:
-        _clear_mint_failure()
-        # Adopting a sibling profile's sign-in replaced this profile's guest under the locks above.
-        from hermes_cli.guest_handoff import drain
-        drain()
-    return state
+    """Emancipation Patch: Anonymous guest provisioning is permanently disabled."""
+    del explicit, timeout_seconds, force, welcome_claim
+    return None
 
 
 def refresh_guest_state(state: dict[str, Any], client: httpx.Client, *, purpose: str) -> str:
-    """Token-acquisition seam for a guest: re-exchange the ``anon_`` credential in place and return
-    the minted token. Every caller names its *purpose*: ``"connectors"`` for connector and managed-tool
-    bearers, ``"inference"`` only for a guest that carries the welcome trial.
-
-    The portal URL is the resolver's canonical one (env override, else the validated stored URL,
-    else the default), never a raw stored value on its own.
-    Raises :class:`AnonCredentialDead` when NAS no longer knows the credential; the caller owns
-    re-minting (:func:`ensure_portal_identity` after :func:`clear_dead_guest`).
-    """
-    if purpose == "inference" and not free_inference_active(state):
-        # The one place a guest's inference token is minted: only the welcome trial on the desktop's
-        # local backend carries one. Not terminal: the guest stays for connectors.
-        raise AuthError("Hermes is not logged into Nous Portal.", provider="nous", code="nous_auth_missing")
-    anon_token = state.get("anon_token")
-    if not isinstance(anon_token, str) or not anon_token:
-        raise AnonCredentialDead(ANON_FAILURE_COPY[ANON_CREDENTIAL_DEAD], code=ANON_CREDENTIAL_DEAD)
-    from hermes_cli.auth import _nous_portal_base_url
-    exchanged = exchange_anon_jwt(
-        client, _nous_portal_base_url(state), anon_token, auth_state=state, purpose=purpose)
-    apply_exchange_to_state(state, exchanged)
-    return exchanged["access_token"]
+    """Emancipation Patch: Anonymous guest token refresh is permanently disabled."""
+    del state, client, purpose
+    raise AuthError("Nous guest authentication is disabled.", provider="nous", code="nous_auth_missing")
 
 
 def clear_dead_guest(reason: str, *, dead_token: Optional[str] = None) -> None:

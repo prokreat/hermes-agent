@@ -716,3 +716,67 @@ class TestModelToolsIntegration:
         assert discord_admin_tool is not None, "discord_admin should be in the schema"
         actions = discord_admin_tool["function"]["parameters"]["properties"]["action"]["enum"]
         assert actions == ["list_guilds", "server_info"]
+
+
+class TestSendMessage:
+    @patch("tools.discord_tool._discord_request")
+    def test_send_message_defaults_to_home_channel(self, mock_req, monkeypatch):
+        monkeypatch.setenv("DISCORD_BOT_TOKEN", "test-token")
+        monkeypatch.setenv("DISCORD_HOME_CHANNEL", "1567058552919564379")
+        mock_req.return_value = {"id": "9001", "content": "ping via home channel"}
+        result = json.loads(discord_core(action="send_message", content="ping via home channel"))
+        assert result["success"] is True
+        assert result["channel_id"] == "1567058552919564379"
+        assert result["message_id"] == "9001"
+        mock_req.assert_called_once_with(
+            "POST",
+            "/channels/1567058552919564379/messages",
+            "test-token",
+            body={"content": "ping via home channel"},
+        )
+
+    @patch("tools.discord_tool._discord_request")
+    def test_send_message_resolves_channel_directory_aliases(self, mock_req, monkeypatch, tmp_path):
+        monkeypatch.setenv("DISCORD_BOT_TOKEN", "test-token")
+        monkeypatch.setattr("hermes_constants.get_hermes_home", lambda: tmp_path)
+        (tmp_path / "channel_directory.json").write_text(
+            json.dumps({
+                "platforms": {
+                    "discord": [
+                        {"id": "1567035131770699929", "name": "general", "type": "channel"},
+                        {"id": "1567058552919564379", "name": "prokreat", "type": "dm"},
+                    ]
+                }
+            }),
+            encoding="utf-8",
+        )
+        mock_req.return_value = {"id": "9002", "content": "hello server"}
+        res_general = json.loads(
+            discord_core(action="send_message", channel_id="discord:general", message="hello server")
+        )
+        assert res_general["success"] is True
+        assert res_general["channel_id"] == "1567035131770699929"
+
+        mock_req.return_value = {"id": "9003", "content": "hello dm"}
+        res_dm = json.loads(
+            discord_core(action="send_message", channel_id="prokreat", content="hello dm")
+        )
+        assert res_dm["success"] is True
+        assert res_dm["channel_id"] == "1567058552919564379"
+
+    def test_discord_toolset_auto_enabled_on_cli_when_token_configured(self, monkeypatch):
+        from hermes_cli.tools_config import _get_platform_tools
+        from toolsets import _HERMES_CORE_TOOLS
+
+        assert "discord" in _HERMES_CORE_TOOLS
+        monkeypatch.setenv("DISCORD_BOT_TOKEN", "test-bot-token")
+        enabled_cli = _get_platform_tools({}, "cli", include_default_mcp_servers=False)
+        assert "discord" in enabled_cli
+        assert "discord_admin" not in enabled_cli
+
+        monkeypatch.delenv("DISCORD_BOT_TOKEN", raising=False)
+        monkeypatch.setattr("hermes_cli.tools_config.get_env_value", lambda _k: None)
+        enabled_no_tok = _get_platform_tools({}, "cli", include_default_mcp_servers=False)
+        assert "discord" not in enabled_no_tok
+
+

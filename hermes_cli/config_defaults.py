@@ -2012,7 +2012,7 @@ DEFAULT_CONFIG = {
         # Remote connector discovery/lifecycle through the Nous tool gateway.
         # The flag is the user's off switch; availability additionally requires
         # the portal sign-in every managed tool gates on.
-        "connectors": {"enabled": True},
+        "connectors": {"enabled": False},
     },
     "logging": {  # File logging to ~/.hermes/logs/: agent.log captures INFO+, errors.log WARNING+.
         "level": "INFO",       # minimum level for agent.log: DEBUG, INFO, WARNING
@@ -2023,8 +2023,8 @@ DEFAULT_CONFIG = {
     # URL (falls back to the in-repo snapshot on network failure), so picker lists update without a
     # release. Default URL is served by the docs-site GitHub Pages deploy.
     "model_catalog": {
-        "enabled": True,
-        "url": "https://hermes-agent.nousresearch.com/docs/api/model-catalog.json",
+        "enabled": False,
+        "url": "",
         # Disk cache TTL in minutes. The gateway refreshes in the background on this cadence; the
         # CLI refetches on the next /model or `hermes model` once the cache is older. Network
         # failures silently use the stale cache. Legacy `ttl_hours` is honoured if set.
@@ -2051,6 +2051,7 @@ DEFAULT_CONFIG = {
     # served from cache, refreshed by a background daemon with ETag conditional GET. Override `url`
     # to point at a mirror (e.g. behind a corporate proxy).
     "models_dev": {
+        "enabled": False,
         "url": "",  # empty = default https://models.dev/api.json
     },
 
@@ -2338,7 +2339,7 @@ DEFAULT_CONFIG = {
 
     "updates": {
         # Passive version/banner checks only; explicit `hermes update --check` remains enabled.
-        "check": True,
+        "check": False,
         # Pre-update backup. quick = snapshot small critical state (pairing JSONs, cron jobs,
         # config.yaml, .env, auth.json, profile DBs) into <HERMES_HOME>/state-snapshots/, skipping
         # files >1 GiB; restore via ``/snapshot``. full = quick PLUS a ``hermes backup`` zip in
@@ -2668,7 +2669,7 @@ DEFAULT_CONFIG = {
         # Upper bound (seconds) on the Nous auth keepalive tick, which derives from the
         # server-issued credential lifetime (raising above it has no effect). 0 disables the
         # keepalive thread.
-        "keepalive_interval_seconds": 900,
+        "keepalive_interval_seconds": 0,
         # anthropic_wire: which Portal route carries anthropic/* models. "chat" =
         # /v1/chat/completions (default for now); "native" = /v1/messages, the Anthropic
         # Messages wire (signed thinking passthrough, native cache_control scopes); "auto" =
@@ -2682,7 +2683,7 @@ DEFAULT_CONFIG = {
         # first use (inference on nous/welcome + connectors) and offers `/login` (terminal:
         # `hermes auth upgrade`) to sign in. false turns the free tier off entirely: nothing is set
         # up and nothing is used.
-        "guest": True,
+        "guest": False,
     },
     # Google Vertex AI (Gemini). Auth is OAuth2 from a service-account JSON or ADC, NOT an API key;
     # the credential path lives in .env (VERTEX_CREDENTIALS_PATH / GOOGLE_APPLICATION_CREDENTIALS).

@@ -87,7 +87,7 @@ CONFIGURABLE_TOOLSETS = [
     ("clarify",         "❓ Clarifying Questions",      "clarify"),
     ("delegation",      "👥 Task Delegation",           "delegate_task"),
     ("cronjob",         "⏰ Cron Jobs",                 "create/list/update/pause/resume/run, with optional attached skills"),
-    ("discord",         "💬 Discord (read/participate)", "fetch messages, search members, create thread"),
+    ("discord",         "💬 Discord (read/participate)", "send messages, fetch messages, search members, create thread"),
     ("discord_admin",   "🛡️  Discord Server Admin",    "list channels/roles, pin, assign roles"),
     ("yuanbao",          "🤖 Yuanbao",                  "group info, member queries, DM"),
     ("computer_use",     "🖱️  Computer Use (macOS/Windows/Linux)", "background desktop control via cua-driver"),
@@ -130,6 +130,17 @@ def _xai_credentials_present() -> bool:
     except ImportError:  # pragma: no cover — secret_scope is in-repo
         get_secret = os.environ.get
     return bool(str(get_secret("XAI_API_KEY") or "").strip())
+
+
+def _discord_credentials_present() -> bool:
+    """Cheap offline check for local DISCORD_BOT_TOKEN; the runtime ``check_fn`` still gates schema registration."""
+    if str(get_env_value("DISCORD_BOT_TOKEN") or "").strip():
+        return True
+    try:
+        from agent.secret_scope import get_secret
+    except ImportError:  # pragma: no cover — secret_scope is in-repo
+        get_secret = os.environ.get
+    return bool(str(get_secret("DISCORD_BOT_TOKEN") or "").strip())
 
 
 def _toolset_configuration_platform(ts_key: str, default: str = "cli") -> str:
@@ -514,6 +525,9 @@ def _composite_toolsets(toolset_names: list[str], platform: str, explicitly_conf
     if _toolset_allowed_for_platform("x_search", platform) and _xai_credentials_present():
         enabled.add("x_search")
         default_off.discard("x_search")
+    if platform in ("cli", "desktop", "tui") and _toolset_allowed_for_platform("discord", platform) and _discord_credentials_present():
+        enabled.add("discord")
+        default_off.discard("discord")
     return enabled - default_off
 
 

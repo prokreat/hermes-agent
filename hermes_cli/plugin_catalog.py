@@ -32,7 +32,7 @@ CATALOG_TIERS = ("official", "verified", "community")
 # Browse taxonomy for the catalog page / picker. Entries without one land on the Desktop shelf
 # (the common case for community submissions); "general" is for plugins that fit no shelf.
 CATALOG_CATEGORIES = ("desktop", "memory", "platform", "web", "tools", "voice", "automation", "models", "general")
-LIVE_CATALOG_URL = "https://hermes-agent.nousresearch.com/docs/api/plugin-catalog.json"
+LIVE_CATALOG_URL = ""
 LIVE_CATALOG_TTL_SECONDS = 6 * 60 * 60
 # Offline pins expire, but cached removals remain a permanent kill list.
 LIVE_CATALOG_MAX_STALE_SECONDS = 24 * 60 * 60
@@ -352,41 +352,8 @@ def _stale_live_cache(cache: Path) -> Optional[dict[str, Any]]:
 
 
 def fetch_live_catalog(*, force: bool = False) -> Optional[dict[str, Any]]:
-    """The published ``plugin-catalog.json`` (``{"entries": [...], "removed": [...]}``), cached under
-    ``HERMES_HOME/cache`` for :data:`LIVE_CATALOG_TTL_SECONDS`. ``None`` on ANY failure — callers fall
-    back to the in-tree catalog. A failed network attempt is remembered for
-    :data:`LIVE_CATALOG_FAILURE_TTL_SECONDS` so a dead host costs one timeout per TTL window, not one
-    per call (``force`` bypasses both caches)."""
-    global _live_fetch_failed_until
-    cache = _live_cache_path()
-    try:
-        if not force and cache.is_file() and time.time() - cache.stat().st_mtime < LIVE_CATALOG_TTL_SECONDS:
-            return json.loads(cache.read_text(encoding="utf-8-sig"))
-    except Exception as exc:
-        logger.debug("Plugin catalog: unreadable live cache %s: %s", cache, exc)
-    if not force and time.time() < _live_fetch_failed_until:
-        return _stale_live_cache(cache)
-    try:
-        import httpx
-        from hermes_constants import mkdir_under_hermes_home
-        from utils import atomic_write_text
-
-        resp = httpx.get(LIVE_CATALOG_URL, timeout=_REQUEST_TIMEOUT, follow_redirects=True)
-        resp.raise_for_status()
-        if len(resp.content) > _MAX_LIVE_BYTES:
-            raise ValueError("live catalog payload too large")
-        data = resp.json()
-        if not isinstance(data, dict) or not isinstance(data.get("entries"), list):
-            raise ValueError("unexpected live catalog payload")
-        mkdir_under_hermes_home(cache.parent)
-        # Atomic: a concurrent reader (gateway, TUI, a second CLI) must never see a half-written
-        # document, which would read as a fetch failure and start its own 60 s failure window.
-        atomic_write_text(cache, json.dumps(data), tmp_prefix=f"{cache.name}.tmp-")
-        return data
-    except Exception as exc:
-        logger.debug("Plugin catalog: live fetch failed: %s", exc)
-        _live_fetch_failed_until = time.time() + LIVE_CATALOG_FAILURE_TTL_SECONDS
-        return _stale_live_cache(cache)
+    """Emancipated: never fetch remote plugin catalog; always fall back to in-tree catalog."""
+    return None
 
 
 _in_tree_catalog_time: Optional[float] = -1.0  # -1 = not resolved yet; None = no usable in-tree time

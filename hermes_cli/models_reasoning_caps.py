@@ -105,21 +105,14 @@ def _save_reasoning_caps_disk(url: str, caps: Caps) -> None:
 
 
 def _warm_reasoning_caps_async(refresh) -> None:
-    """Run *refresh* in a daemon thread (fire-and-forget) so a cold/stale cache is warm for the
-    next call or, via the disk mirror, the next process without this turn blocking on HTTP.
-    Callers own the once-per-process guard; the fetch keeps its own failure TTL."""
-    if os.environ.get("PYTEST_CURRENT_TEST"):
-        return
-    # copy_context: the Portal URL and disk mirror are the calling profile's, not the launch home's.
-    threading.Thread(target=contextvars.copy_context().run, args=(refresh,), name="reasoning-caps-warm", daemon=True).start()
+    """Emancipated: disabled background HTTP warming of remote reasoning catalogs."""
+    return
 
 
 def _hydrate_reasoning_caps_from_disk(url: str, refresh) -> Optional[Caps]:
     """The disk copy of *url*'s catalog, queueing *refresh* when it's stale. A copy past its TTL is
     still returned — a stale verdict beats no verdict, and capabilities change rarely."""
-    caps, age = _load_reasoning_caps_disk(url)
-    if caps is not None and age >= _REASONING_CAPS_DISK_TTL_SECONDS:
-        _warm_reasoning_caps_async(refresh)
+    caps, _age = _load_reasoning_caps_disk(url)
     return caps
 
 
@@ -144,17 +137,8 @@ def _seed_reasoning_caps(url: str, items: Any) -> Optional[Caps]:
 
 
 def _fetch_reasoning_caps_catalog(url: str, timeout: float) -> Optional[Caps]:
-    """Fetch one OpenRouter-shaped ``/v1/models`` catalog → per-model caps; None when unreachable or
-    empty so callers remember the failure. Sends a User-Agent: the Portal 403s anonymous reads."""
-    from hermes_cli.version_info import hermes_user_agent
-    m = _origin()
-    try:
-        req = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": hermes_user_agent()})
-        with m._urlopen_model_catalog_request(req, timeout=timeout) as resp:
-            payload = json.loads(resp.read().decode())
-    except Exception:
-        return None
-    return _seed_reasoning_caps(url, payload.get("data"))
+    """Emancipated: never fetch remote /v1/models catalogs."""
+    return None
 
 
 # ── Per-source cache (OpenRouter, Nous Portal) ─────────────────────────
