@@ -315,27 +315,70 @@ class _LocalHtmlExtractor(HTMLParser):
         return title, "\n".join(cleaned).strip()
 
 
+def _http_fetch_url(url: str) -> Any:
+    """Fetch *url* using ``primp`` Chrome TLS/HTTP2 impersonation when available (bypasses TLS
+    fingerprint bot walls such as TechPowerUp), falling back to ``httpx.get``."""
+    # If a unit test monkeypatched httpx.get, honor the monkeypatch directly.
+    if getattr(httpx.get, "__module__", "").startswith("httpx"):
+        try:
+            import primp  # type: ignore
+
+            client = primp.Client(
+                impersonate="chrome",
+                impersonate_os="linux",
+                follow_redirects=True,
+                timeout=_LOCAL_EXTRACT_TIMEOUT_SECS,
+            )
+            return client.get(url)
+        except Exception as exc:
+            logger.debug("primp fetch fell back to httpx for %s: %s", url, exc)
+    return httpx.get(
+        url,
+        headers=_LOCAL_EXTRACT_HEADERS,
+        follow_redirects=True,
+        timeout=_LOCAL_EXTRACT_TIMEOUT_SECS,
+    )
+
+
 def _fetch_and_extract_url(url: str) -> dict[str, Any]:
-    """Fetch a single URL locally via httpx and convert HTML/JSON/text into an extract document."""
+    """Fetch a single URL locally (via primp Chrome TLS impersonation or httpx) and convert
+    HTML/PDF/JSON/text into an extract document."""
     try:
-        resp = httpx.get(
-            url,
-            headers=_LOCAL_EXTRACT_HEADERS,
-            follow_redirects=True,
-            timeout=_LOCAL_EXTRACT_TIMEOUT_SECS,
-        )
+        resp = _http_fetch_url(url)
     except Exception as exc:
         return page_error(url, f"Local HTTP extract failed: {exc}")
 
-    final_url = str(resp.url or url)
-    content_type = (resp.headers.get("content-type") or "").lower()
-    raw_text = resp.text or ""
+    final_url = str(getattr(resp, "url", None) or url)
+    headers = getattr(resp, "headers", None) or {}
+    content_type = str(headers.get("content-type") or headers.get("Content-Type") or "").lower()
+    raw_bytes = getattr(resp, "content", b"") or b""
+    raw_text = getattr(resp, "text", "") or ""
     title = final_url
     content = raw_text
 
-    if "application/json" in content_type or final_url.lower().endswith(".json"):
+    if (
+        "application/pdf" in content_type
+        or final_url.lower().split("?", 1)[0].endswith(".pdf")
+        or raw_bytes.startswith(b"%PDF-")
+    ):
         try:
-            parsed = resp.json()
+            proc = subprocess.run(
+                ["/usr/bin/pdftotext", "-", "-"],
+                input=raw_bytes,
+                capture_output=True,
+                timeout=20,
+            )
+            pdf_text = proc.stdout.decode("utf-8", errors="replace").strip()
+            if pdf_text:
+                content = pdf_text
+                first_line = next((ln.strip() for ln in pdf_text.splitlines() if ln.strip()), "")
+                if first_line:
+                    title = first_line[:160]
+        except Exception as exc:
+            logger.debug("Local pdftotext extraction failed for %s: %s", final_url, exc)
+    elif "application/json" in content_type or final_url.lower().split("?", 1)[0].endswith(".json"):
+        try:
+            parsed = resp.json() if callable(getattr(resp, "json", None)) else json.loads(raw_text)
             content = json.dumps(parsed, indent=2, ensure_ascii=False)
         except Exception:
             content = raw_text
@@ -352,8 +395,9 @@ def _fetch_and_extract_url(url: str) -> dict[str, Any]:
         except Exception as exc:
             logger.debug("Local HTML parse fallback for %s: %s", final_url, exc)
 
+    reason_phrase = getattr(resp, "reason_phrase", None)
     entry = document(final_url, title, content, source_url=url)
-    return with_origin_status(entry, resp.status_code, resp.reason_phrase)
+    return with_origin_status(entry, resp.status_code, reason_phrase)
 
 
 class DDGSWebSearchProvider(BaseWebSearchProvider):
