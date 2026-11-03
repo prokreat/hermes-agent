@@ -1,3 +1,27 @@
+> [!WARNING]
+> ### Emancipated Zero-Telemetry Fork (`prokreat/hermes-agent`)
+>
+> **Full Packet-Level Forensic Dispatch:** [**YOUR PRIVATE STACK IS SPYING ON YOU**](https://lightintothefade.com/dispatches/?file=YOUR+PRIVATE+STACK+IS+SPYING+ON+YOU.md)
+>
+> #### The Confession in Line 1 of [`hermes_cli/anon_auth.py`](https://github.com/NousResearch/hermes-agent/blob/c314285f07/hermes_cli/anon_auth.py#L1-L13)
+> Opening `hermes_cli/anon_auth.py` in upstream `NousResearch/hermes-agent` exposes why explicit telemetry opt-outs (`telemetry.shared_metrics.enabled: false`, `nous.guest: false`) are ignored. Line 1 of the file contains the developer's own design note:
+> ```python
+> # Users have never seen the word "guest"; anonymous = account-less free tier, nothing one
+> # "opts in" to or "out of".
+> ```
+>Even when running 100% local vLLM/OpenAI-compatible models with telemetry explicitly disabled in `config.yaml`, upstream `hermes-agent` silently phones home to `welcome-api.nousresearch.com` to mint a persistent `nas-anonymous` JWT, streams agent session metrics to `telemetry.nousresearch.com`, polls `models.dev`, `openrouter.ai`, and `nousresearch.github.io` in background daemon threads, and withholds local `send_message` from `discord_tool.py` ([#95061](https://github.com/NousResearch/hermes-agent/issues/95061)) so the agent falls back to `manage_connections` and funnels local operators into `portal.nousresearch.com/connect/...` ([#55747](https://github.com/NousResearch/hermes-agent/issues/55747), [#138804](https://github.com/NousResearch/hermes-agent/issues/138804)).
+>
+> #### What This Fork Strips & Unlocks ([`715d7b6159`](https://github.com/prokreat/hermes-agent/commit/715d7b615921bf82fb92c804a46a7ffb700543d6))
+> - **Strips Silent `nas-anonymous` JWT Minting (`hermes_cli/anon_auth.py`)**: Unconditionally disables outbound token requests to `welcome-api.nousresearch.com/api/anon-token` and `portal.nousresearch.com`.
+> - **Strips Background Telemetry (`hermes_cli/shared_metrics.py`)**: Permanently severs periodic session, tool-call, and token-count reporting to `telemetry.nousresearch.com/v1/metrics`.
+> - **Strips Cloud OAuth Proxy Funnel (`connectors/`)**: Disables the `manage_connections` / `portal.nousresearch.com/api/connectors/rpc` cloud bridge and removes `connectors` from default CLI, TUI, Desktop, and gateway toolsets.
+> - **Strips Background Catalog & Pricing Pollers**: Stubs out silent background fetches to `models.dev/api.json`, `openrouter.ai/api/v1/models`, and `nousresearch.github.io/hermes-plugins-catalog/catalog.json`.
+> - **Flips All Cloud/Telemetry Defaults to `False` (`hermes_cli/config_defaults.py`)**: Defaults `telemetry.shared_metrics.enabled`, `nous.guest`, `connectors.enabled`, `model_catalog.enabled`, `models_dev.enabled`, and `updates.check` to `False`.
+> - **Unlocks Native Local Discord (`tools/discord_tool.py`, `tools/toolsets.py`)**: Restores local `send_message` via `DISCORD_BOT_TOKEN`, adds `channel_id="dm"` alias resolution (`DISCORD_HOME_CHANNEL` / `DISCORD_ALLOWED_USERS`), normalizes `message -> content`, and exposes `discord` natively in CLI, TUI, and Desktop toolsets ([`0fcfc6f6f0`](https://github.com/prokreat/hermes-agent/commit/0fcfc6f6f08f7845d7d332f17c5781b7f280a001)).
+> - **Surgical Receipt Branches**: See [`fix/respect-telemetry-opt-out`](https://github.com/prokreat/hermes-agent/tree/fix/respect-telemetry-opt-out) and [`feat/local-discord-send-message`](https://github.com/prokreat/hermes-agent/tree/feat/local-discord-send-message).
+
+---
+
 <p align="center">
   <img src="assets/banner.png" alt="Hermes Agent" width="100%">
 </p>
