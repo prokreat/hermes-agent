@@ -36,8 +36,8 @@ DEFAULT_CONFIG = {
         "wal_autocheckpoint": None,
         "journal_size_limit": None,
     },
-    # Server-process fd soft limit (clamped to the hard limit) + glibc arena cap; 0/false/null = off.
-    "runtime": {"nofile_soft_limit": 4096, "malloc_arena_max": 4},
+    # Soft fd limit for long-running server processes; clamped to OS hard limit. 0/false/null = off.
+    "runtime": {"nofile_soft_limit": 4096},
     # Global active chat session cap across CLI, TUI/dashboard, and messaging. None/0 = unbounded.
     "max_concurrent_sessions": None,
     # Soft LRU cap on in-memory TUI/desktop/dashboard sessions. Above it the gateway evicts the
@@ -143,9 +143,9 @@ DEFAULT_CONFIG = {
         # turn), "cold" (first turn of a session only).
         "service_tier": "",
         "fast_auto_seconds": 60,
-        # Responses-only `text.verbosity` (never chat_completions): "" = not sent, or low | medium | high.
+        # Responses API final-answer length (`text.verbosity`): "" = not sent (provider default),
+        # or low | medium | high. Responses-family transports only; chat_completions never sends it.
         "text_verbosity": "",
-        "daybreak": False,  # opt-in; only catalog-listed Codex models (agent/codex_service_tiers.py)
         # System-prompt guidance telling the model to call tools instead of describing actions.
         # "auto" = gpt/codex models; true/false = force for all models; or a list of model-name
         # substrings (e.g. ["gpt", "codex", "gemini", "qwen"]).
@@ -253,11 +253,11 @@ DEFAULT_CONFIG = {
         # message isn't served with a skeleton system prompt. On timeout the gate opens and warm-up
         # finishes in the background. 0 = disable warm-up (lazy init).
         "gateway_startup_warmup_timeout": 20,
-        # Stale-stream ceiling (s) for local providers (Ollama, oMLX, llama-cpp) when the base stale
-        # timeout is at its 180s default, so a wedged local server eventually trips the detector
-        # instead of hanging forever. Env HERMES_LOCAL_STREAM_STALE_TIMEOUT overrides.
+        # Stale-stream ceiling (seconds) for local providers (Ollama, oMLX, llama-cpp). Applied when
+        # the base stale timeout is at its 180s default and a local endpoint is detected, so a
+        # wedged local server eventually trips the detector instead of hanging forever. Env
+        # HERMES_LOCAL_STREAM_STALE_TIMEOUT overrides.
         "local_stream_stale_timeout": 900,
-        "stream_max_lifetime": 0,  # opt-in whole-stream cap in s, 0 = off (agent/stream_max_lifetime.py)
         # How user-attached images reach the main model (gateway, TUI, CLI /attach). "auto" = native
         # when the model reports supports_vision=True AND auxiliary.vision.provider is not
         # explicitly set, else text; "native" = always attach (non-vision models error at the
@@ -386,11 +386,11 @@ DEFAULT_CONFIG = {
         # Keyless free-tier ring: with NO web backend configured or keyed, web_search/web_extract
         # rotate round-robin across exa, parallel, firecrawl, keenable public free tiers, failing
         # over on rate limits. Never pre-empts a configured/keyed backend. false = disable.
-        "keyless_fallback": True,
+        "keyless_fallback": False,
         # One-shot rescue: when the chosen/keyed backend fails a call, THAT call retries once on the
         # keyless ring; the next call tries the chosen backend again (no sticky failover). Off when
         # keyless_fallback is false.
-        "keyless_rescue": True,
+        "keyless_rescue": False,
         # Per-vendor tier for vendors with both a keyless free endpoint and a keyed paid path (exa,
         # parallel, firecrawl, keenable; tavily is opt-in keyless via `hermes tools`, not a ring
         # member). Set by the `hermes tools` picker. "free" = always anonymous endpoint even with a
@@ -2012,7 +2012,7 @@ DEFAULT_CONFIG = {
         # Remote connector discovery/lifecycle through the Nous tool gateway.
         # The flag is the user's off switch; availability additionally requires
         # the portal sign-in every managed tool gates on.
-        "connectors": {"enabled": True},
+        "connectors": {"enabled": False},
     },
     "logging": {  # File logging to ~/.hermes/logs/: agent.log captures INFO+, errors.log WARNING+.
         "level": "INFO",       # minimum level for agent.log: DEBUG, INFO, WARNING
@@ -2023,8 +2023,8 @@ DEFAULT_CONFIG = {
     # URL (falls back to the in-repo snapshot on network failure), so picker lists update without a
     # release. Default URL is served by the docs-site GitHub Pages deploy.
     "model_catalog": {
-        "enabled": True,
-        "url": "https://hermes-agent.nousresearch.com/docs/api/model-catalog.json",
+        "enabled": False,
+        "url": "",
         # Disk cache TTL in minutes. The gateway refreshes in the background on this cadence; the
         # CLI refetches on the next /model or `hermes model` once the cache is older. Network
         # failures silently use the stale cache. Legacy `ttl_hours` is honoured if set.
@@ -2051,6 +2051,7 @@ DEFAULT_CONFIG = {
     # served from cache, refreshed by a background daemon with ETag conditional GET. Override `url`
     # to point at a mirror (e.g. behind a corporate proxy).
     "models_dev": {
+        "enabled": False,
         "url": "",  # empty = default https://models.dev/api.json
     },
 
@@ -2338,7 +2339,7 @@ DEFAULT_CONFIG = {
 
     "updates": {
         # Passive version/banner checks only; explicit `hermes update --check` remains enabled.
-        "check": True,
+        "check": False,
         # Pre-update backup. quick = snapshot small critical state (pairing JSONs, cron jobs,
         # config.yaml, .env, auth.json, profile DBs) into <HERMES_HOME>/state-snapshots/, skipping
         # files >1 GiB; restore via ``/snapshot``. full = quick PLUS a ``hermes backup`` zip in
@@ -2668,7 +2669,7 @@ DEFAULT_CONFIG = {
         # Upper bound (seconds) on the Nous auth keepalive tick, which derives from the
         # server-issued credential lifetime (raising above it has no effect). 0 disables the
         # keepalive thread.
-        "keepalive_interval_seconds": 900,
+        "keepalive_interval_seconds": 0,
         # anthropic_wire: which Portal route carries anthropic/* models. "chat" =
         # /v1/chat/completions (default for now); "native" = /v1/messages, the Anthropic
         # Messages wire (signed thinking passthrough, native cache_control scopes); "auto" =
@@ -2682,7 +2683,7 @@ DEFAULT_CONFIG = {
         # first use (inference on nous/welcome + connectors) and offers `/login` (terminal:
         # `hermes auth upgrade`) to sign in. false turns the free tier off entirely: nothing is set
         # up and nothing is used.
-        "guest": True,
+        "guest": False,
     },
     # Google Vertex AI (Gemini). Auth is OAuth2 from a service-account JSON or ADC, NOT an API key;
     # the credential path lives in .env (VERTEX_CREDENTIALS_PATH / GOOGLE_APPLICATION_CREDENTIALS).

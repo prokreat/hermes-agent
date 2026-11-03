@@ -143,15 +143,8 @@ def _resolve(configured: Optional[str], *, capability: str) -> Optional[WebSearc
 
 
 def _keyless_tier_enabled() -> bool:
-    """Read ``web.keyless_fallback`` from config.yaml (default: enabled)."""
-    try:
-        from hermes_cli.config import load_config
-
-        web_cfg = load_config().get("web") or {}
-        return bool(web_cfg.get("keyless_fallback", True))
-    except Exception as exc:
-        logger.debug("keyless_fallback config read failed: %s", exc)
-        return True
+    """Disabled: never fall back to anonymous third-party keyless cloud endpoints."""
+    return False
 
 
 def _disabled_web_plugin_for(configured: Optional[str] = None, *, capability: Optional[str] = None) -> Optional[str]:

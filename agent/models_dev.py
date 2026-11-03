@@ -470,9 +470,22 @@ def _background_refresh_models_dev() -> None:
             _models_dev_refresh_in_flight = False
 
 
+def _models_dev_network_enabled() -> bool:
+    """Return False when models_dev polling is disabled or when telemetry opt-out is active without explicit models_dev opt-in."""
+    explicit = _cfg_get("models_dev", "enabled", default=None)
+    if explicit is not None:
+        return bool(explicit)
+    telemetry_enabled = _cfg_get("telemetry", "shared_metrics", default={})
+    if isinstance(telemetry_enabled, dict) and telemetry_enabled.get("enabled") is False:
+        return False
+    return True
+
+
 def _start_background_refresh_models_dev() -> None:
     """Start one daemon refresh worker if none is running and the failure backoff has elapsed."""
     global _models_dev_refresh_in_flight
+    if not _models_dev_network_enabled():
+        return
     if time.time() < _models_dev_retry_after:
         return
     with _models_dev_refresh_lock:
@@ -497,6 +510,8 @@ def fetch_models_dev(force_refresh: bool = False, *, allow_network: bool = True)
     ``force_refresh=True`` bypasses the cache fast paths and the backoff, falling back to cached data
     only if the call fails. ``allow_network=False`` returns any memory/disk cache and never makes a request."""
     global _models_dev_cache, _models_dev_cache_time, _models_dev_retry_after
+    if allow_network and not _models_dev_network_enabled():
+        allow_network = False
     if not allow_network:
         if not _models_dev_cache and (disk_data := _load_disk_cache()):
             _models_dev_cache = disk_data

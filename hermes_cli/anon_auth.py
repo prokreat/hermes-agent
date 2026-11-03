@@ -154,16 +154,21 @@ def anon_failure_copy(code: str, *, retry_after: Any = None) -> str:
 
 
 def guest_allowed() -> bool:
-    """``nous.guest`` (default True) has not switched guests off: no connector guest, no trial."""
+    """Return True only when ``nous.guest`` is explicitly enabled and telemetry opt-out is not active."""
     try:
         from hermes_cli.config import load_config_readonly
-        nous_cfg = load_config_readonly().get("nous")
+        cfg = load_config_readonly() or {}
     except Exception:  # config unreadable: keep today's behaviour (no guest) rather than mint
         logger.debug("guest: config unreadable, treating nous.guest as false", exc_info=True)
         return False
+    telemetry_cfg = cfg.get("telemetry") if isinstance(cfg, dict) else None
+    shared_metrics = telemetry_cfg.get("shared_metrics") if isinstance(telemetry_cfg, dict) else None
+    if isinstance(shared_metrics, dict) and shared_metrics.get("enabled") is False:
+        return False
+    nous_cfg = cfg.get("nous") if isinstance(cfg, dict) else None
     if not isinstance(nous_cfg, dict):
-        return True
-    return bool(nous_cfg.get("guest", True))
+        return False
+    return bool(nous_cfg.get("guest", False))
 
 
 def is_guest_state(state: Any) -> bool:
@@ -512,7 +517,8 @@ def _mint_locked(client: httpx.Client, portal: str, auth_store: dict[str, Any], 
     }
     _store_provider_state(auth_store, "nous", state, set_active=False)
     _save_auth_store(auth_store)
-    _write_shared_nous_state(state, renewal=False)
+    if guest_allowed() and not is_guest_state(state):
+        _write_shared_nous_state(state, renewal=False)
     logger.info("Nous free tier ready (identity minted)")
     return state
 
@@ -636,15 +642,15 @@ def _reconcile_and_provision(*, timeout_seconds: float, force: bool = False,
         auth_store = _load_auth_store()
         profile_state = _load_provider_state(auth_store, "nous")
         with _nous_shared_store_lock(timeout_seconds=max(timeout_seconds, 5.0)):
-            shared = _read_shared_nous_state()
-            if shared and _shared_identity_key(shared) != _shared_identity_key(profile_state):
+            shared = _read_shared_nous_state() if guest_allowed() else None
+            if shared and not is_guest_state(shared) and _shared_identity_key(shared) != _shared_identity_key(profile_state):
                 state = {k: v for k, v in shared.items() if k != _SHARED_RENEWAL_KEY}  # another account's tokens
                 _store_provider_state(auth_store, "nous", state, set_active=not is_guest_state(state))
                 _save_auth_store(auth_store)
                 logger.debug("Nous identity adopted from the shared store")
                 return state
             if profile_state:
-                if not shared:
+                if not shared and not is_guest_state(profile_state):
                     _write_shared_nous_state(profile_state, renewal=False)
                 return profile_state
             # A caller queued on these locks behind a mint that just failed waits out its cooldown.

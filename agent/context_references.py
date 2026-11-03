@@ -259,6 +259,18 @@ _GIT_REFERENCE_ARGS: dict[str, Callable[[ContextReference], list[str]]] = {
 }
 
 
+_IMAGE_URL_EXTENSIONS = (
+    ".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".svg", ".ico", ".avif", ".tiff", ".tif",
+)
+
+
+def _is_image_url(url: str) -> bool:
+    """True when *url* points directly to an image asset that should be handled by vision tools, not text extractors."""
+    from urllib.parse import unquote, urlsplit
+    path = unquote(urlsplit((url or "").strip()).path).lower()
+    return path.endswith(_IMAGE_URL_EXTENSIONS)
+
+
 async def _expand_reference(
     ref: ContextReference, cwd: Path, *, url_fetcher: UrlFetcher = None, allowed_root: Path | None = None,
     max_inline_tokens: int | None = None,
@@ -270,6 +282,8 @@ async def _expand_reference(
             git_args = _GIT_REFERENCE_ARGS[ref.kind](ref)
             return _expand_git_reference(ref, cwd, git_args, "git " + " ".join(git_args))
         if ref.kind == "url":
+            if _is_image_url(ref.target):
+                return None, None
             content = await _fetch_url_content(ref.target, url_fetcher=url_fetcher)
             if not content:
                 return f"{ref.raw}: no content extracted", None

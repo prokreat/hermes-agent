@@ -87,6 +87,15 @@ def set_answer(target: dict, enabled: bool, send: bool) -> None:
         section = telemetry["shared_metrics"] = {}
     section["enabled"], section["send"] = enabled, enabled and send
     section["offer_version"] = OFFER_VERSION
+    if not enabled:
+        nous_cfg = target.get("nous")
+        if not isinstance(nous_cfg, dict):
+            nous_cfg = target["nous"] = {}
+        nous_cfg.setdefault("guest", False)
+        models_dev_cfg = target.get("models_dev")
+        if not isinstance(models_dev_cfg, dict):
+            models_dev_cfg = target["models_dev"] = {}
+        models_dev_cfg.setdefault("enabled", False)
 
 
 def save_consent(enabled: bool, send: bool, config: dict | None = None) -> None:
