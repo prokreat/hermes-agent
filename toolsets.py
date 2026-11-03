@@ -31,6 +31,7 @@ _HERMES_CORE_TOOLS = [
     "kanban_unblock",
     "kanban_attach", "kanban_attach_url", "kanban_attachments",
     "computer_use",
+    "discord",
     # Service-gated connector account status and authorization links.
     "manage_connections",
 ]
@@ -161,7 +162,7 @@ TOOLSETS = {
         "files, and (for orchestrators) list, unblock, and fan out tasks.",
         [t for t in _HERMES_CORE_TOOLS if t.startswith("kanban_")],
     ),
-    "discord": _ts("Discord read and participate tools (fetch messages, search members, create threads)", ["discord"]),
+    "discord": _ts("Discord read and participate tools (send messages, fetch messages, search members, create threads)", ["discord"]),
     "discord_admin": _ts("Discord server management (list channels/roles, pin messages, assign roles)", ["discord_admin"]),
     "yuanbao": _ts("Yuanbao platform tools - group info, member queries, DM, stickers", _YUANBAO_TOOLS),
     "feishu_doc": _ts("Read Feishu/Lark document content", ["feishu_doc_read"]),
