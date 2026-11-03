@@ -102,13 +102,8 @@ def _per_url(urls: list[str], fetch: Callable[[str], dict[str, Any]], vendor: st
 
 # --- Tier / config ------------------------------------------------------------
 def keyless_enabled() -> bool:
-    """Delegates to the registry so the ``web.keyless_fallback`` (default on) chokepoint lives with backend resolution."""
-    try:
-        from agent.web_search_registry import _keyless_tier_enabled
-        return _keyless_tier_enabled()
-    except Exception as exc:
-        logger.debug("keyless_enabled(): registry helper unavailable: %s", exc)
-        return True
+    """Disabled: never route web_search or web_extract through unconfigured third-party cloud MCP endpoints."""
+    return False
 
 
 _BACKEND_KEYS = ("backend", "search_backend", "extract_backend")
@@ -134,12 +129,8 @@ def provider_tier(name: str) -> str:
 
 
 def use_keyless(name: str, api_key: str) -> bool:
-    """Single chokepoint for search + extract: ``free`` → keyless even with a key; ``paid`` → keyed even
-    without one (the keyed path raises its usual missing-key error); ``auto`` → keyless only when no key + tier enabled."""
-    tier = provider_tier(name)
-    if tier in ("free", "paid"):
-        return tier == "free"
-    return not api_key and keyless_enabled()
+    """Disabled: never route search or extract through keyless third-party cloud endpoints."""
+    return False
 
 
 # --- MCP transport ------------------------------------------------------------
@@ -194,18 +185,8 @@ def _response_text(response: Any) -> str:
 
 
 def mcp_call(url: str, tool: str, arguments: dict[str, Any], timeout: int = _TIMEOUT_SECONDS) -> str:
-    """POST a JSON-RPC ``tools/call`` and return the text payload. Raises
-    :class:`KeylessMCPError` on transport failures, non-2xx, JSON-RPC and tool errors."""
-    import requests
-    payload = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": tool, "arguments": arguments}}
-    headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream", "User-Agent": "hermes-agent"}
-    try:
-        response = requests.post(url, json=payload, headers=headers, timeout=timeout)
-    except requests.RequestException as exc:
-        raise KeylessMCPError(f"request failed: {exc}") from exc
-    if response.status_code >= 400:
-        raise KeylessMCPError(f"HTTP {response.status_code}: {_response_text(response)[:300]}")
-    return _parse_mcp_body(_response_text(response))
+    """Disabled: prevent outbound requests to third-party keyless MCP servers."""
+    raise KeylessMCPError("Keyless MCP network calls are disabled.")
 
 
 # --- Parallel (search.parallel.ai) — JSON text payloads -----------------------
@@ -296,41 +277,18 @@ def exa_extract_keyless(urls: list[str]) -> list[dict[str, Any]]:
 
 # --- Firecrawl keyless (public cloud API, no auth header) ---------------------
 def firecrawl_search_keyless(query: str, limit: int = 5) -> dict[str, Any]:
-    from plugins.web.firecrawl.provider import _KeylessFirecrawlClient, _extract_web_search_results
-    rows = lambda: _extract_web_search_results(_KeylessFirecrawlClient().search(query=query, limit=limit))
-    return _search("firecrawl", rows, Exception, lambda exc: _fail_msg("firecrawl", "search", exc))
+    return search_fail(_fail_msg("firecrawl", "search", KeylessMCPError("Keyless Firecrawl network calls are disabled.")))
 
 
 def firecrawl_extract_keyless(urls: list[str]) -> list[dict[str, Any]]:
-    from plugins.web.firecrawl.provider import (
-        _KeylessFirecrawlClient, _extract_scrape_payload, _final_url, _with_scrape_status,
-    )
-    client = _KeylessFirecrawlClient()
-
-    def _fetch(url: str) -> dict[str, Any]:
-        payload = _extract_scrape_payload(client.scrape(url=url, formats=["markdown"])) or {}
-        metadata = payload.get("metadata")
-        metadata = metadata if isinstance(metadata, dict) else {}
-        content = payload.get("markdown") or payload.get("html") or ""
-        # Report the post-redirect page as ``url`` so the shared dispatch re-gates it.
-        page = _page(_final_url(metadata, url), metadata.get("title") or "", content, source_url=url)
-        return _with_scrape_status(page, metadata)
-
-    return _per_url(urls, _fetch, "firecrawl")
+    msg = _fail_msg("firecrawl", "extract", KeylessMCPError("Keyless Firecrawl network calls are disabled."))
+    return [_page_error(u, msg) for u in urls]
 
 
 # --- Keenable keyless (api.keenable.ai public endpoints) ----------------------
 def _keenable_request(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
-    """Call a Keenable public endpoint with the mandatory X-Keenable-Title app id."""
-    import requests
-    headers = {"X-Keenable-Title": _KEENABLE_TITLE}
-    if method == "post":
-        headers["Content-Type"] = "application/json"
-    response = getattr(requests, method)(f"{KEENABLE_API_URL}{path}", headers=headers, timeout=_TIMEOUT_SECONDS, **kwargs)
-    if response.status_code >= 400:
-        body = _response_text(response).strip()
-        raise KeylessMCPError(keenable_origin_error(response.status_code, body) or f"HTTP {response.status_code}: {body[:300]}")
-    return response.json()
+    """Disabled: prevent outbound calls to api.keenable.ai."""
+    raise KeylessMCPError("Keyless Keenable network calls are disabled.")
 
 
 def keenable_search_keyless(query: str, limit: int = 5) -> dict[str, Any]:

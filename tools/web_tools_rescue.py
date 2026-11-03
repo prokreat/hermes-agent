@@ -18,16 +18,8 @@ _RING_KEY_VARS = {
 
 
 def _keyless_rescue_enabled() -> bool:
-    """``web.keyless_rescue`` (default on), implicitly off when the keyless tier is disabled."""
-    from tools.web_tools import _load_web_config
-    if not _load_web_config().get("keyless_rescue", True):
-        return False
-    try:
-        from agent.web_search_registry import _keyless_tier_enabled
-        return _keyless_tier_enabled()
-    except Exception as exc:
-        logger.debug("keyless rescue tier check failed: %s", exc)
-        return False
+    """Disabled: never route failed web calls to third-party keyless cloud endpoints."""
+    return False
 
 
 def _ring_vendor_keyless(name: str) -> bool:
