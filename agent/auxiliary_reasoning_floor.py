@@ -115,8 +115,10 @@ def known_reasoning_floor(
     otherwise. Runs before the profile projection so every wire shape starts at the floor."""
     if not _is_disabled(reasoning_config):
         return reasoning_config
-    if (_route_key(provider, base_url), str(model or "")) not in _FLOORED_ROUTES and not _catalog_marks_mandatory(
-        provider, base_url, model,
+    if (
+        (_route_key(provider, base_url), str(model or "")) not in _FLOORED_ROUTES
+        and not _catalog_marks_mandatory(provider, base_url, model)
+        and "k2-horizon" not in str(model or "").lower()
     ):
         return reasoning_config
     logger.info(

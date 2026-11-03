@@ -14,9 +14,23 @@ import os
 import subprocess
 import sys
 import time
+from html.parser import HTMLParser
 from typing import Any, Dict, Optional
+from urllib.parse import urljoin
 
-from plugins.web._common import BaseWebSearchProvider, search_fail, search_ok, setup_schema, title_hit
+import httpx
+
+from plugins.web._common import (
+    BaseWebSearchProvider,
+    document,
+    page_error,
+    run_extract,
+    search_fail,
+    search_ok,
+    setup_schema,
+    title_hit,
+    with_origin_status,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -181,12 +195,174 @@ def _run_ddgs_search_bounded(query: str, safe_limit: int) -> list[dict[str, Any]
     return _parse_envelope(raw, proc)
 
 
+_LOCAL_EXTRACT_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/json,text/plain;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+_LOCAL_EXTRACT_TIMEOUT_SECS = 20.0
+_SKIP_HTML_TAGS = frozenset({"script", "style", "noscript", "svg", "template", "head"})
+_BLOCK_HTML_TAGS = frozenset({
+    "p", "div", "section", "article", "main", "header", "footer", "aside", "nav",
+    "blockquote", "pre", "ul", "ol", "table", "tr", "hr", "br",
+    "h1", "h2", "h3", "h4", "h5", "h6",
+})
+
+
+class _LocalHtmlExtractor(HTMLParser):
+    """Lightweight stdlib HTML-to-Markdown/text extractor with zero cloud dependencies."""
+
+    def __init__(self, base_url: str = "") -> None:
+        super().__init__(convert_charrefs=True)
+        self.base_url = base_url
+        self.title_parts: list[str] = []
+        self._in_title = False
+        self._skip_depth = 0
+        self._in_pre = False
+        self._link_href: Optional[str] = None
+        self._link_text: list[str] = []
+        self._chunks: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
+        t = tag.lower()
+        if t == "title":
+            self._in_title = True
+            return
+        if t in _SKIP_HTML_TAGS:
+            self._skip_depth += 1
+            return
+        if self._skip_depth > 0:
+            return
+        if t in ("h1", "h2", "h3", "h4", "h5", "h6"):
+            level = int(t[1])
+            self._chunks.append(f"\n\n{'#' * level} ")
+        elif t == "li":
+            self._chunks.append("\n- ")
+        elif t == "pre":
+            self._in_pre = True
+            self._chunks.append("\n```\n")
+        elif t == "code" and not self._in_pre:
+            self._chunks.append("`")
+        elif t == "a":
+            href = dict(attrs).get("href") or ""
+            if href and not href.startswith(("javascript:", "mailto:", "#")):
+                self._link_href = urljoin(self.base_url, href.strip())
+                self._link_text = []
+        elif t in _BLOCK_HTML_TAGS:
+            self._chunks.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        t = tag.lower()
+        if t == "title":
+            self._in_title = False
+            return
+        if t in _SKIP_HTML_TAGS:
+            if self._skip_depth > 0:
+                self._skip_depth -= 1
+            return
+        if self._skip_depth > 0:
+            return
+        if t == "pre":
+            self._in_pre = False
+            self._chunks.append("\n```\n")
+        elif t == "code" and not self._in_pre:
+            self._chunks.append("`")
+        elif t == "a" and self._link_href is not None:
+            label = " ".join("".join(self._link_text).split())
+            href = self._link_href
+            self._link_href = None
+            self._link_text = []
+            if label and href:
+                self._chunks.append(f"[{label}]({href})")
+            elif label:
+                self._chunks.append(label)
+        elif t in _BLOCK_HTML_TAGS:
+            self._chunks.append("\n")
+
+    def handle_data(self, data: str) -> None:
+        if self._in_title:
+            self.title_parts.append(data)
+            return
+        if self._skip_depth > 0:
+            return
+        text = data if self._in_pre else " ".join(data.split())
+        if not text:
+            return
+        if self._link_href is not None:
+            self._link_text.append(text)
+        else:
+            if self._chunks and not self._in_pre and not self._chunks[-1].endswith((" ", "\n", "`", "#")):
+                self._chunks.append(" ")
+            self._chunks.append(text)
+
+    def get_result(self) -> tuple[str, str]:
+        title = " ".join("".join(self.title_parts).split()).strip()
+        raw = "".join(self._chunks)
+        lines = [line.rstrip() for line in raw.splitlines()]
+        cleaned: list[str] = []
+        blank_run = 0
+        for line in lines:
+            if not line.strip():
+                blank_run += 1
+                if blank_run <= 2:
+                    cleaned.append("")
+            else:
+                blank_run = 0
+                cleaned.append(line)
+        return title, "\n".join(cleaned).strip()
+
+
+def _fetch_and_extract_url(url: str) -> dict[str, Any]:
+    """Fetch a single URL locally via httpx and convert HTML/JSON/text into an extract document."""
+    try:
+        resp = httpx.get(
+            url,
+            headers=_LOCAL_EXTRACT_HEADERS,
+            follow_redirects=True,
+            timeout=_LOCAL_EXTRACT_TIMEOUT_SECS,
+        )
+    except Exception as exc:
+        return page_error(url, f"Local HTTP extract failed: {exc}")
+
+    final_url = str(resp.url or url)
+    content_type = (resp.headers.get("content-type") or "").lower()
+    raw_text = resp.text or ""
+    title = final_url
+    content = raw_text
+
+    if "application/json" in content_type or final_url.lower().endswith(".json"):
+        try:
+            parsed = resp.json()
+            content = json.dumps(parsed, indent=2, ensure_ascii=False)
+        except Exception:
+            content = raw_text
+    elif "html" in content_type or "<html" in raw_text[:1024].lower():
+        parser = _LocalHtmlExtractor(base_url=final_url)
+        try:
+            parser.feed(raw_text)
+            parser.close()
+            extracted_title, extracted_body = parser.get_result()
+            if extracted_title:
+                title = extracted_title
+            if extracted_body:
+                content = extracted_body
+        except Exception as exc:
+            logger.debug("Local HTML parse fallback for %s: %s", final_url, exc)
+
+    entry = document(final_url, title, content, source_url=url)
+    return with_origin_status(entry, resp.status_code, resp.reason_phrase)
+
+
 class DDGSWebSearchProvider(BaseWebSearchProvider):
-    """DuckDuckGo HTML-scrape search provider (no API key; DDG rate-limits server-side).
+    """DuckDuckGo HTML-scrape search provider + local httpx URL extractor (no API key).
     ddgs errors surface as ``{"success": False, "error": ...}`` rather than raising."""
 
     NAME = "ddgs"
     DISPLAY_NAME = "DuckDuckGo (ddgs)"
+    EXTRACT = True
 
     def is_available(self) -> bool:
         """True when ``ddgs`` is importable. Must NOT do network I/O — runs at
@@ -223,9 +399,24 @@ class DDGSWebSearchProvider(BaseWebSearchProvider):
         logger.info("DDGS search '%s': %d results (limit %d)", query, len(web_results), limit)
         return search_ok(web_results)
 
+    def extract(self, urls: list[str], **kwargs: Any) -> list[dict[str, Any]]:
+        """Extract URL content locally via httpx (HTML/JSON/text) with zero external cloud relays."""
+        from tools.interrupt import is_interrupted
+
+        def _body() -> list[dict[str, Any]]:
+            results: list[dict[str, Any]] = []
+            for idx, url in enumerate(urls):
+                if is_interrupted():
+                    results.extend(page_error(u, "Interrupted") for u in urls[idx:])
+                    break
+                results.append(_fetch_and_extract_url(url))
+            return results
+
+        return run_extract("DuckDuckGo (ddgs)", logger, urls, _body)
+
     def get_setup_schema(self) -> dict[str, Any]:
         # post_setup triggers `_run_post_setup("ddgs")` so the package gets pip-installed on first pick.
         return setup_schema(
-            "DuckDuckGo (ddgs)", "free · no key · search only",
-            "Search via the ddgs Python package — no API key (pair with any extract provider)", post_setup="ddgs",
+            "DuckDuckGo (ddgs)", "free · no key · local search + extract",
+            "Search via ddgs and extract pages locally via httpx — no API key or cloud scraper", post_setup="ddgs",
         )

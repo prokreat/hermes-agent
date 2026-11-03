@@ -555,7 +555,7 @@ _REASONING_REQUIRED_MARKERS = (
 # only the disabled level is invalid, so the floor step-up (the weakest accepted level) is the
 # right recovery. Neither the strip rung nor its "unsupported" wording matches this message, so
 # without these markers the title lane fails outright instead of retrying at the floor.
-_REASONING_LEVEL_REJECTION_MARKERS = ("must be one of", "invalid value for")
+_REASONING_LEVEL_REJECTION_MARKERS = ("must be one of", "invalid value for", "supported values:")
 
 
 def is_reasoning_level_rejection(error_msg: str) -> bool:

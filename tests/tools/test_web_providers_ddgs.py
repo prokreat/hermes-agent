@@ -266,9 +266,11 @@ class TestDDGSSearchOnlyErrors:
         from agent.web_search_registry import _reset_for_tests
         _reset_for_tests()
 
-    def test_web_extract_returns_search_only_error(self, monkeypatch):
+    def test_web_extract_uses_local_httpx_extractor(self, monkeypatch):
         import asyncio
+        from types import SimpleNamespace
         from tools import web_tools
+        import plugins.web.ddgs.provider as ddgs_prov
 
         monkeypatch.setattr(web_tools, "_load_web_config", lambda: {"backend": "ddgs"})
         monkeypatch.setattr(web_tools, "_ddgs_package_importable", lambda: True)
@@ -278,11 +280,23 @@ class TestDDGSSearchOnlyErrors:
 
         monkeypatch.setattr(web_tools, "async_is_safe_url", _allow_ssrf)
         monkeypatch.setattr("tools.interrupt.is_interrupted", lambda: False, raising=False)
+        monkeypatch.setattr(
+            ddgs_prov.httpx,
+            "get",
+            lambda url, **kw: SimpleNamespace(
+                url=url,
+                status_code=200,
+                reason_phrase="OK",
+                headers={"content-type": "text/html"},
+                text="<html><head><title>Example Title</title></head><body><h1>Hello</h1><p>World</p></body></html>",
+            ),
+        )
 
         result_str = asyncio.get_event_loop().run_until_complete(
             web_tools.web_extract_tool(["https://example.com"])
         )
         result = json.loads(result_str)
-        assert result["success"] is False
-        assert "search-only" in result["error"].lower()
-        assert "duckduckgo" in result["error"].lower() or "ddgs" in result["error"].lower()
+        assert "results" in result
+        assert result["results"][0]["title"] == "Example Title"
+        assert "Hello" in result["results"][0]["content"]
+        assert "World" in result["results"][0]["content"]
